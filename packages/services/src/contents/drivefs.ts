@@ -101,7 +101,7 @@ type TDriveResponses = {
   getmode: number;
   lookup: DriveFS.ILookup;
   mknod: null;
-  getattr: IStats;
+  getattr: IStats | null;
   get: {
     /**
      * The returned file content
@@ -567,6 +567,10 @@ export abstract class ContentsAPI {
       path: this.normalizePath(path),
     });
 
+    if (!stats) {
+      throw new this.FS.ErrnoError(this.ERRNO_CODES['ENOENT']);
+    }
+
     // Emscripten 4.0.9+ (used by Pyodide 0.28+) requires all three timestamps
     // to be valid Date objects with .getTime() method (see https://github.com/emscripten-core/emscripten/pull/22998).
     // Fallback to epoch if any timestamp is missing/null/undefined.
@@ -677,6 +681,8 @@ export class DriveFS {
 
     this.node_ops = new DriveFSEmscriptenNodeOps(this);
     this.stream_ops = new DriveFSEmscriptenStreamOps(this);
+
+    this._hookMayCreate();
   }
 
   node_ops: IEmscriptenNodeOps;
@@ -733,6 +739,40 @@ export class DriveFS {
     parts.reverse();
 
     return this.PATH.join.apply(null, parts);
+  }
+
+  /**
+   * Wrap `FS.mayCreate` so that it does not report `EEXIST` for a path which
+   * has been deleted from the drive by another browsing context.
+   *
+   * Creating a path (`FS.mkdir`, `FS.mknod`) only consults the Emscripten node
+   * cache, so a node deleted from the file browser is still found there and
+   * makes the creation fail without any drive request being sent.
+   */
+  private _hookMayCreate(): void {
+    const FS = this.FS;
+    const { destroyNode, lookupNode, mayCreate } = FS;
+
+    if (!destroyNode || !lookupNode || !mayCreate) {
+      return;
+    }
+
+    FS.mayCreate = (dir: IEmscriptenFSNode, name: string): number => {
+      const errCode = mayCreate.call(FS, dir, name);
+
+      if (
+        errCode !== this.ERRNO_CODES['EEXIST'] ||
+        dir.node_ops !== this.node_ops ||
+        this.API.lookup(this.PATH.join2(this.realPath(dir), name)).ok
+      ) {
+        return errCode;
+      }
+
+      // The cached node no longer exists on the drive: forget about it so that
+      // the path can be created again.
+      destroyNode.call(FS, lookupNode.call(FS, dir, name));
+      return mayCreate.call(FS, dir, name);
+    };
   }
 }
 
