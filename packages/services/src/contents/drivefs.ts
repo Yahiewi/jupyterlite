@@ -742,12 +742,8 @@ export class DriveFS {
   }
 
   /**
-   * Wrap `FS.mayCreate` so that it does not report `EEXIST` for a path which
-   * has been deleted from the drive by another browsing context.
-   *
-   * Creating a path (`FS.mkdir`, `FS.mknod`) only consults the Emscripten node
-   * cache, so a node deleted from the file browser is still found there and
-   * makes the creation fail without any drive request being sent.
+   * Wrap `FS.mayCreate` to delete stale cached nodes when recreating a path
+   * deleted externally (e.g. from the UI file browser).
    */
   private _hookMayCreate(): void {
     const FS = this.FS;
@@ -768,8 +764,7 @@ export class DriveFS {
         return errCode;
       }
 
-      // The cached node no longer exists on the drive: forget about it so that
-      // the path can be created again.
+      // destroy stale node and retry creation
       destroyNode.call(FS, lookupNode.call(FS, dir, name));
       return mayCreate.call(FS, dir, name);
     };
