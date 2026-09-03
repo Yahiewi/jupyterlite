@@ -577,7 +577,7 @@ test.describe('Kernels', () => {
     test.setTimeout(120000);
 
     await page.goto('lab/index.html');
-    await page.notebook.createNew();
+    await page.notebook.open('empty.ipynb');
 
     const dirName = 'test_dir';
 
